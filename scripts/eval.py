@@ -95,7 +95,7 @@ def main(eval_args: EvalArgs):
 
             # Save video and metadata
             filename = run_folder / f"episode_{episode}.mp4"
-            mediapy.write_video(filename, video, fps=15)
+            mediapy.write_video(filename, video, fps=5)
 
             # Log episode results to CSV
             episode_data = {
