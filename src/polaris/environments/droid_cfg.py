@@ -187,6 +187,28 @@ class SceneCfg(InteractiveSceneCfg):
                     convention="opengl",
                 ),
             )
+        
+        # for the block stacking scenario
+        if not hasattr(self, "viz_cam"):
+            self.viz_cam = CameraCfg(
+                prim_path="{ENV_REGEX_NS}/scene/viz_cam",
+                height=720,
+                width=1280,
+                data_types=["rgb", "semantic_segmentation"],
+                colorize_semantic_segmentation=False,
+                spawn=sim_utils.PinholeCameraCfg(
+                    focal_length=1.0476,
+                    horizontal_aperture=2.5452,
+                    vertical_aperture=1.4721,
+                ),
+                offset=CameraCfg.OffsetCfg(
+                    pos=(-0.01, -0.33, 0.48),
+                    rot=(0.76, 0.43, -0.24, -0.42),
+                    # pos=(1.0, 0.0, 0.5), # (1.0, 0.0, 0.5) works well for block stacking and organize tools # ~1.2m in front, 0.8m up — adjust to taste
+                    # rot= (0.6015, 0.3717, 0.3717, 0.6015),
+                    convention="opengl",
+                ),
+            )
 
 
 ### SceneCfg ###
