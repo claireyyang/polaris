@@ -53,6 +53,7 @@ class EvalArgs:
     initial_conditions_file: str | None = None  # Path to initial conditions file
     instruction: str | None = None  # Override language instruction
     rollouts: int | None = None  # Number of rollouts to evaluate
+    interactive: bool = False  # Enable interactive instruction updates
 
 
 @dataclass

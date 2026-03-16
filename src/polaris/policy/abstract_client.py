@@ -60,6 +60,14 @@ class InferenceClient(ABC):
         """
         pass
 
+    def discard_action_chunk(self):
+        """
+        Discards any remaining actions in the current action chunk.
+        This forces the policy to requery on the next infer() call.
+        Override this method if your policy uses action chunking.
+        """
+        pass
+
 
 class FakeClient(InferenceClient):
     """

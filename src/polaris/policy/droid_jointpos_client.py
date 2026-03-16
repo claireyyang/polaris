@@ -40,6 +40,10 @@ class DroidJointPosClient(InferenceClient):
         self.actions_from_chunk_completed = 0
         self.pred_action_chunk = None
 
+    def discard_action_chunk(self):
+        self.actions_from_chunk_completed = 0
+        self.pred_action_chunk = None
+
     def infer(
         self, obs: dict, instruction: str, return_viz: bool = False
     ) -> tuple[np.ndarray, np.ndarray | None]:

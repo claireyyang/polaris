@@ -7,12 +7,65 @@ import gymnasium as gym
 import torch
 import argparse
 import pandas as pd
+import threading
+import queue
+import sys
+import select
 
 
 from pathlib import Path
 from isaaclab.app import AppLauncher
 
 from polaris.config import EvalArgs
+
+
+def instruction_listener(instruction_queue: queue.Queue, stop_event: threading.Event):
+    """
+    Background thread that listens for user input to update instructions.
+    Simply type a new instruction and press Enter - it will be applied on the next step.
+    """
+    print("\n" + "="*60)
+    print("INTERACTIVE MODE ENABLED")
+    print("Type a new instruction and press Enter to update it during execution")
+    print("The instruction will be applied immediately on the next policy query")
+    print("TIP: Use --headless False to see the simulation visually")
+    print("="*60 + "\n")
+    
+    while not stop_event.is_set():
+        try:
+            # Check if input is available (non-blocking on Unix)
+            if sys.platform != 'win32':
+                # Unix-like systems: use select
+                if select.select([sys.stdin], [], [], 0.1)[0]:
+                    line = sys.stdin.readline().strip()
+                    if line:
+                        instruction_queue.put(line)
+                        print(f"\n✓ Instruction updated to: '{line}'")
+                        print(">>> Will apply on next policy query\n")
+            else:
+                # Windows: fall back to blocking input with timeout
+                # This is less ideal but works
+                import msvcrt
+                if msvcrt.kbhit():
+                    line = input().strip()
+                    if line:
+                        instruction_queue.put(line)
+                        print(f"\n✓ Instruction updated to: '{line}'")
+                        print(">>> Will apply on next policy query\n")
+                else:
+                    threading.Event().wait(0.1)
+        except (EOFError, KeyboardInterrupt):
+            break
+        except Exception:
+            # Fallback: just use blocking input
+            try:
+                line = input().strip()
+                if line:
+                    instruction_queue.put(line)
+                    print(f"\n✓ Instruction updated to: '{line}'")
+                    print(">>> Will apply on next policy query\n")
+            except (EOFError, KeyboardInterrupt):
+                break
 
 
 def main(eval_args: EvalArgs):
@@ -41,7 +94,7 @@ def main(eval_args: EvalArgs):
         num_envs=1,
         use_fabric=True,
     )
-    env: MangerBasedRLSplatEnv = gym.make(eval_args.environment, cfg=env_cfg)  # type: ignore
+    env: ManagerBasedRLSplatEnv = gym.make(eval_args.environment, cfg=env_cfg)  # type: ignore
 
     language_instruction, initial_conditions = load_eval_initial_conditions(
         usd=env.usd_file,
@@ -73,6 +126,17 @@ def main(eval_args: EvalArgs):
 
     policy_client: InferenceClient = InferenceClient.get_client(eval_args.policy)
 
+    # Setup interactive instruction updates (only if enabled)
+    instruction_queue = queue.Queue()
+    stop_event = threading.Event()
+    if eval_args.interactive:
+        listener_thread = threading.Thread(
+            target=instruction_listener, 
+            args=(instruction_queue, stop_event),
+            daemon=True
+        )
+        listener_thread.start()
+
     video = []
     horizon = env.max_episode_length
     bar = tqdm.tqdm(range(horizon))
@@ -80,9 +144,21 @@ def main(eval_args: EvalArgs):
         object_positions=initial_conditions[episode % len(initial_conditions)]
     )
     policy_client.reset()
+    current_instruction = language_instruction
     print(f" >>> Starting eval job from episode {episode + 1} of {rollouts} <<< ")
+    print(f" >>> Initial instruction: '{current_instruction}' <<< ")
+    
     while True:
-        action, viz = policy_client.infer(obs, language_instruction)
+        # Check for instruction updates
+        try:
+            new_instruction = instruction_queue.get_nowait()
+            current_instruction = new_instruction
+            policy_client.discard_action_chunk()
+            print("\n>>> Action chunk discarded, requerying policy with new instruction <<<\n")
+        except queue.Empty:
+            pass
+        
+        action, viz = policy_client.infer(obs, current_instruction)
         if viz is not None:
             video.append(viz)
         obs, rew, term, trunc, info = env.step(
@@ -115,12 +191,17 @@ def main(eval_args: EvalArgs):
             obs, info = env.reset(
                 object_positions=initial_conditions[episode % len(initial_conditions)]
             )
+            
+            # Reset instruction to original for new episode
+            current_instruction = language_instruction
+            print(f" >>> Starting episode {episode + 1} with instruction: '{current_instruction}' <<< ")
 
             episode += 1
             video = []
             if episode >= rollouts:
                 break
 
+    stop_event.set()
     env.close()
     simulation_app.close()
 
