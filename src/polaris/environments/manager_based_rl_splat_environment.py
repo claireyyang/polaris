@@ -140,11 +140,17 @@ class ManagerBasedRLSplatEnv(ManagerBasedRLEnv):
         pixels = self._world_to_pixel(points_world, cam_pos, cam_rot, K)
 
         projections: dict = {}
+        projections_pct: dict = {}
         for label, uv in zip(all_labels, pixels):
             u, v = float(uv[0]), float(uv[1])
             in_frame = 0 <= u < W and 0 <= v < H
             projections[label] = {"u": u, "v": v, "in_frame": in_frame}
+            projections_pct[label] = {
+                "u_pct": max(0.0, min(100.0, u / W * 100)),
+                "v_pct": max(0.0, min(100.0, v / H * 100)),
+            }
         state["projections"] = projections
+        state["projections_percentages"] = projections_pct
 
         return state
 
