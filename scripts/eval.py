@@ -93,6 +93,7 @@ def main(eval_args: EvalArgs):
 
         step_state = env.get_scene_state(cam_name="viz_cam")
         step_state["step"] = bar.n
+        step_state["time"] = bar.n / 5.0
         scene_state_log.append(step_state)
 
         bar.update(1)
