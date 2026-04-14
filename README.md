@@ -2,6 +2,22 @@
 
 ---
 
+# Troubleshooting
+
+`GLFW initialization failed.`:
+
+```
+echo $DISPLAY
+xauth list
+ls -la /tmp/.X11-unix/
+ps aux | grep Xorg
+```
+
+```
+export DISPLAY=:1
+export XAUTHORITY=/run/user/1000/gdm/Xauthority
+```
+
 # PolaRiS
 
 **[🌐 Website](https://polaris-evals.github.io/)** • **[📄 Paper](https://arxiv.org/abs/2512.16881)** • **[🤗 PolaRiS Hub](https://huggingface.co/datasets/owhan/PolaRiS-Hub)**
