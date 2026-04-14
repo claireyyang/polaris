@@ -1,3 +1,4 @@
+import json
 import tyro
 import mediapy
 
@@ -74,6 +75,7 @@ def main(eval_args: EvalArgs):
     policy_client: InferenceClient = InferenceClient.get_client(eval_args.policy)
 
     video = []
+    scene_state_log = []
     horizon = env.max_episode_length
     bar = tqdm.tqdm(range(horizon))
     obs, info = env.reset(
@@ -89,6 +91,10 @@ def main(eval_args: EvalArgs):
             torch.tensor(action).reshape(1, -1), expensive=policy_client.rerender
         )
 
+        step_state = env.get_scene_state(cam_name="viz_cam")
+        step_state["step"] = bar.n
+        scene_state_log.append(step_state)
+
         bar.update(1)
         if term[0] or trunc[0] or bar.n >= horizon:
             policy_client.reset()
@@ -96,6 +102,11 @@ def main(eval_args: EvalArgs):
             # Save video and metadata
             filename = run_folder / f"episode_{episode}.mp4"
             mediapy.write_video(filename, video, fps=5)
+
+            # Save per-step scene state log
+            scene_state_path = run_folder / f"episode_{episode}_scene_state.json"
+            with open(scene_state_path, "w") as f:
+                json.dump(scene_state_log, f, indent=2)
 
             # Log episode results to CSV
             episode_data = {
@@ -118,6 +129,7 @@ def main(eval_args: EvalArgs):
 
             episode += 1
             video = []
+            scene_state_log = []
             if episode >= rollouts:
                 break
 

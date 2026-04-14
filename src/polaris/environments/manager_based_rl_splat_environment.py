@@ -56,6 +56,98 @@ class ManagerBasedRLSplatEnv(ManagerBasedRLEnv):
             }
         }
 
+    def _get_camera_intrinsics(self, cam_name: str) -> np.ndarray:
+        """Build 3x3 intrinsics matrix K for the named camera sensor."""
+        cam = self.scene[cam_name]
+        h_aperture = cam._sensor_prims[0].GetHorizontalApertureAttr().Get()
+        v_aperture = cam._sensor_prims[0].GetVerticalApertureAttr().Get()
+        focal_length = cam._sensor_prims[0].GetFocalLengthAttr().Get()
+        H, W = cam.image_shape
+        fx = focal_length * W / h_aperture
+        fy = focal_length * H / v_aperture
+        cx, cy = W / 2.0, H / 2.0
+        return np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]], dtype=np.float64)
+
+    def _world_to_pixel(
+        self, points_world: np.ndarray, cam_pos: np.ndarray,
+        cam_rot: np.ndarray, K: np.ndarray,
+    ) -> np.ndarray:
+        """Project Nx3 world points to Nx2 pixel coordinates (u, v).
+
+        Uses OpenCV convention: camera looks along +Z, +X right, +Y down.
+        ``cam_rot`` is the 3x3 rotation matrix of the camera in world frame
+        (columns = camera axes in world coords, derived from
+        ``quat_w_world`` via ``math.matrix_from_quat``).
+        """
+        R_cam_world = cam_rot.T
+        t = -R_cam_world @ cam_pos
+        pts_cam = (R_cam_world @ points_world.T).T + t
+        # Avoid division by zero for points behind the camera
+        z = pts_cam[:, 2:3].clip(min=1e-6)
+        uv = (K @ (pts_cam / z).T).T[:, :2]
+        return uv
+
+    def get_scene_state(self, cam_name: str = "viz_cam") -> dict:
+        """Return world-frame poses for the EE, all objects, and the
+        specified camera, along with pixel-space projections of the EE
+        and objects into that camera.
+
+        Returns a JSON-serialisable dict.
+        """
+        state: dict = {}
+
+        # --- End effector ---
+        ee_pos = self.scene["ee_frame"].data.target_pos_w[0].detach().cpu().numpy()
+        state["ee"] = {"pos_world": ee_pos.tolist()}
+
+        # --- Rigid objects ---
+        state["objects"] = {}
+        for obj_name in self.scene.rigid_objects:
+            obj_pos = self.scene[obj_name].data.root_pos_w[0].detach().cpu().numpy()
+            obj_quat = self.scene[obj_name].data.root_quat_w[0].detach().cpu().numpy()
+            state["objects"][obj_name] = {
+                "pos_world": obj_pos.tolist(),
+                "quat_world": obj_quat.tolist(),
+            }
+
+        # --- Camera extrinsics + intrinsics ---
+        cam = self.scene[cam_name]
+        cam_pos = cam.data.pos_w[0].detach().cpu().numpy()
+        cam_quat = cam.data.quat_w_world[0]
+        cam_rot = math.matrix_from_quat(cam_quat).detach().cpu().numpy()
+        K = self._get_camera_intrinsics(cam_name)
+        H, W = cam.image_shape
+
+        state["camera"] = {
+            "name": cam_name,
+            "pos_world": cam_pos.tolist(),
+            "quat_world": cam_quat.detach().cpu().tolist(),
+            "rotation_matrix": cam_rot.tolist(),
+            "intrinsics": K.tolist(),
+            "resolution": [int(H), int(W)],
+        }
+
+        # --- Project EE and objects into camera pixel space ---
+        all_points = [ee_pos]
+        all_labels = ["ee"]
+        for obj_name in self.scene.rigid_objects:
+            all_points.append(
+                self.scene[obj_name].data.root_pos_w[0].detach().cpu().numpy()
+            )
+            all_labels.append(obj_name)
+
+        points_world = np.stack(all_points, axis=0)  # (N, 3)
+        pixels = self._world_to_pixel(points_world, cam_pos, cam_rot, K)
+
+        projections: dict = {}
+        for label, uv in zip(all_labels, pixels):
+            u, v = float(uv[0]), float(uv[1])
+            in_frame = 0 <= u < W and 0 <= v < H
+            projections[label] = {"u": u, "v": v, "in_frame": in_frame}
+        state["projections"] = projections
+
+        return state
+
     def reset(self, object_positions: dict = {}, expensive=True, *args, **kwargs):
         """
         Reset the environment
