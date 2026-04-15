@@ -74,15 +74,17 @@ class ManagerBasedRLSplatEnv(ManagerBasedRLEnv):
     ) -> np.ndarray:
         """Project Nx3 world points to Nx2 pixel coordinates (u, v).
 
-        Uses OpenCV convention: camera looks along +Z, +X right, +Y down.
-        ``cam_rot`` is the 3x3 rotation matrix of the camera in world frame
-        (columns = camera axes in world coords, derived from
-        ``quat_w_world`` via ``math.matrix_from_quat``).
+        ``cam_rot`` is the 3x3 rotation from ``quat_w_world`` (Isaac Lab
+        "world" convention: +X forward, +Y left, +Z up).  We convert to
+        OpenCV convention (+Z forward, +X right, +Y down) before projecting.
         """
-        R_cam_world = cam_rot.T
+        # Isaac "world" → OpenCV axis permutation (same as splat renderer p_mat)
+        p_mat = np.array([[0, 0, 1], [-1, 0, 0], [0, -1, 0]], dtype=np.float64)
+        cam_rot_cv = cam_rot @ p_mat
+
+        R_cam_world = cam_rot_cv.T
         t = -R_cam_world @ cam_pos
         pts_cam = (R_cam_world @ points_world.T).T + t
-        # Avoid division by zero for points behind the camera
         z = pts_cam[:, 2:3].clip(min=1e-6)
         uv = (K @ (pts_cam / z).T).T[:, :2]
         return uv
@@ -97,7 +99,7 @@ class ManagerBasedRLSplatEnv(ManagerBasedRLEnv):
         state: dict = {}
 
         # --- End effector ---
-        ee_pos = self.scene["ee_frame"].data.target_pos_w[0].detach().cpu().numpy()
+        ee_pos = self.scene["ee_frame"].data.target_pos_w[0, 0].detach().cpu().numpy()
         state["ee"] = {"pos_world": ee_pos.tolist()}
 
         # --- Rigid objects ---

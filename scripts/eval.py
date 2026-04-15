@@ -88,14 +88,15 @@ def main(eval_args: EvalArgs):
         action, viz = policy_client.infer(obs, language_instruction)
         if viz is not None:
             video.append(viz)
+
+            step_state = env.get_scene_state(cam_name="viz_cam")
+            step_state["step"] = bar.n
+            step_state["time"] = len(video) / 5.0
+            scene_state_log.append(step_state)
+
         obs, rew, term, trunc, info = env.step(
             torch.tensor(action).reshape(1, -1), expensive=policy_client.rerender
         )
-
-        step_state = env.get_scene_state(cam_name="viz_cam")
-        step_state["step"] = bar.n
-        step_state["time"] = bar.n / 5.0
-        scene_state_log.append(step_state)
 
         bar.update(1)
         if term[0] or trunc[0] or bar.n >= horizon:
