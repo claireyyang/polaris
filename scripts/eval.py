@@ -42,7 +42,7 @@ def main(eval_args: EvalArgs):
         num_envs=1,
         use_fabric=True,
     )
-    env: MangerBasedRLSplatEnv = gym.make(eval_args.environment, cfg=env_cfg)  # type: ignore
+    env: ManagerBasedRLSplatEnv = gym.make(eval_args.environment, cfg=env_cfg)  # type: ignore
 
     language_instruction, initial_conditions = load_eval_initial_conditions(
         usd=env.usd_file,
