@@ -44,11 +44,15 @@ def main(eval_args: EvalArgs):
     )
     env: ManagerBasedRLSplatEnv = gym.make(eval_args.environment, cfg=env_cfg)  # type: ignore
 
+    print("HERE!!!! about to load eval initial conditions")
+
     language_instruction, initial_conditions = load_eval_initial_conditions(
         usd=env.usd_file,
         initial_conditions_file=eval_args.initial_conditions_file,
         rollouts=eval_args.rollouts,
     )
+
+    print("HERE!!!! initial conditions loaded")
     rollouts = len(initial_conditions)
     # Resume CSV logging
     run_folder = Path(eval_args.run_folder)
