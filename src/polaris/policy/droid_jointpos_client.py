@@ -30,11 +30,7 @@ class DroidJointPosClient(InferenceClient):
         Return the camera views how the model sees it
         """
         curr_obs = self._extract_observation(request)
-        # base_img = image_tools.resize_with_pad(curr_obs["right_image"], 896, 896)
-        viz_img = image_tools.resize_with_pad(curr_obs["viz_camera"], 896, 896)
-        # You can combine multiple views if needed:
-        # combined = np.concatenate([base_img, viz_img], axis=1)
-        return viz_img  # or return combined
+        return curr_obs["viz_camera"]
 
     def reset(self):
         self.actions_from_chunk_completed = 0
@@ -68,13 +64,11 @@ class DroidJointPosClient(InferenceClient):
             server_response = self.client.infer(request_data)
             self.pred_action_chunk = server_response["actions"]
             
-            exterior_image_viz = image_tools.resize_with_pad(
-                curr_obs["viz_camera"], 896, 896
-            )
+            exterior_image_viz = curr_obs["viz_camera"]
 
         if return_viz and exterior_image_viz is None:
             curr_obs = self._extract_observation(obs)
-            exterior_image_viz = image_tools.resize_with_pad(curr_obs["viz_camera"], 896, 896)
+            exterior_image_viz = curr_obs["viz_camera"]
 
         if self.pred_action_chunk is None:
             raise ValueError("No action chunk predicted")

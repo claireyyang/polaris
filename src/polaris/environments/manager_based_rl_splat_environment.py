@@ -56,6 +56,106 @@ class ManagerBasedRLSplatEnv(ManagerBasedRLEnv):
             }
         }
 
+    def _get_camera_intrinsics(self, cam_name: str) -> np.ndarray:
+        """Build 3x3 intrinsics matrix K for the named camera sensor."""
+        cam = self.scene[cam_name]
+        h_aperture = cam._sensor_prims[0].GetHorizontalApertureAttr().Get()
+        v_aperture = cam._sensor_prims[0].GetVerticalApertureAttr().Get()
+        focal_length = cam._sensor_prims[0].GetFocalLengthAttr().Get()
+        H, W = cam.image_shape
+        fx = focal_length * W / h_aperture
+        fy = focal_length * H / v_aperture
+        cx, cy = W / 2.0, H / 2.0
+        return np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]], dtype=np.float64)
+
+    def _world_to_pixel(
+        self, points_world: np.ndarray, cam_pos: np.ndarray,
+        cam_rot: np.ndarray, K: np.ndarray,
+    ) -> np.ndarray:
+        """Project Nx3 world points to Nx2 pixel coordinates (u, v).
+
+        ``cam_rot`` is the 3x3 rotation from ``quat_w_world`` (Isaac Lab
+        "world" convention: +X forward, +Y left, +Z up).  We convert to
+        OpenCV convention (+Z forward, +X right, +Y down) before projecting.
+        """
+        # Isaac "world" → OpenCV axis permutation (same as splat renderer p_mat)
+        p_mat = np.array([[0, 0, 1], [-1, 0, 0], [0, -1, 0]], dtype=np.float64)
+        cam_rot_cv = cam_rot @ p_mat
+
+        R_cam_world = cam_rot_cv.T
+        t = -R_cam_world @ cam_pos
+        pts_cam = (R_cam_world @ points_world.T).T + t
+        z = pts_cam[:, 2:3].clip(min=1e-6)
+        uv = (K @ (pts_cam / z).T).T[:, :2]
+        return uv
+
+    def get_scene_state(self, cam_name: str = "viz_cam") -> dict:
+        """Return world-frame poses for the EE, all objects, and the
+        specified camera, along with pixel-space projections of the EE
+        and objects into that camera.
+
+        Returns a JSON-serialisable dict.
+        """
+        state: dict = {}
+
+        # --- End effector ---
+        ee_pos = self.scene["ee_frame"].data.target_pos_w[0, 0].detach().cpu().numpy()
+        state["ee"] = {"pos_world": ee_pos.tolist()}
+
+        # --- Rigid objects ---
+        state["objects"] = {}
+        for obj_name in self.scene.rigid_objects:
+            obj_pos = self.scene[obj_name].data.root_pos_w[0].detach().cpu().numpy()
+            obj_quat = self.scene[obj_name].data.root_quat_w[0].detach().cpu().numpy()
+            state["objects"][obj_name] = {
+                "pos_world": obj_pos.tolist(),
+                "quat_world": obj_quat.tolist(),
+            }
+
+        # --- Camera extrinsics + intrinsics ---
+        cam = self.scene[cam_name]
+        cam_pos = cam.data.pos_w[0].detach().cpu().numpy()
+        cam_quat = cam.data.quat_w_world[0]
+        cam_rot = math.matrix_from_quat(cam_quat).detach().cpu().numpy()
+        K = self._get_camera_intrinsics(cam_name)
+        H, W = cam.image_shape
+
+        state["camera"] = {
+            "name": cam_name,
+            "pos_world": cam_pos.tolist(),
+            "quat_world": cam_quat.detach().cpu().tolist(),
+            "rotation_matrix": cam_rot.tolist(),
+            "intrinsics": K.tolist(),
+            "resolution": [int(H), int(W)],
+        }
+
+        # --- Project EE and objects into camera pixel space ---
+        all_points = [ee_pos]
+        all_labels = ["ee"]
+        for obj_name in self.scene.rigid_objects:
+            all_points.append(
+                self.scene[obj_name].data.root_pos_w[0].detach().cpu().numpy()
+            )
+            all_labels.append(obj_name)
+
+        points_world = np.stack(all_points, axis=0)  # (N, 3)
+        pixels = self._world_to_pixel(points_world, cam_pos, cam_rot, K)
+
+        projections: dict = {}
+        projections_pct: dict = {}
+        for label, uv in zip(all_labels, pixels):
+            u, v = float(uv[0]), float(uv[1])
+            in_frame = 0 <= u < W and 0 <= v < H
+            projections[label] = {"u": u, "v": v, "in_frame": in_frame}
+            projections_pct[label] = {
+                "u_pct": max(0.0, min(100.0, u / W * 100)),
+                "v_pct": max(0.0, min(100.0, v / H * 100)),
+            }
+        state["projections"] = projections
+        state["projections_percentages"] = projections_pct
+
+        return state
+
     def reset(self, object_positions: dict = {}, expensive=True, *args, **kwargs):
         """
         Reset the environment
@@ -250,6 +350,10 @@ class ManagerBasedRLSplatEnv(ManagerBasedRLEnv):
                 pos = self.scene[name].data.pos_w[0].detach().cpu().numpy()
                 quat = self.scene[name].data.quat_w_world[0]
 
+                if quat.norm() < 1e-6:
+                    print(f"[Warning] transform_sim_to_splat: camera '{name}' has zero quaternion, skipping")
+                    continue
+
                 rot = math.matrix_from_quat(quat).detach().cpu().numpy()
                 cam_extrinsics_dict[name] = {"pos": pos, "rot": rot}
 
@@ -263,6 +367,10 @@ class ManagerBasedRLSplatEnv(ManagerBasedRLEnv):
             if "wrist" in name:
                 pos = self.scene[name].data.pos_w[0].detach().cpu().numpy()
                 quat = self.scene[name].data.quat_w_world[0]
+
+                if quat.norm() < 1e-6:
+                    print(f"[Warning] render_splat: camera '{name}' has zero quaternion, skipping")
+                    continue
 
                 rot = math.matrix_from_quat(quat).detach().cpu().numpy()
                 cam_extrinsics_dict[name] = {"pos": pos, "rot": rot}
