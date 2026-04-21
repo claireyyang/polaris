@@ -208,7 +208,7 @@ class SceneCfg(InteractiveSceneCfg):
                     vertical_aperture=1.4721,
                 ),
                 offset=CameraCfg.OffsetCfg(
-                    pos=(-0.01, -0.33, 0.48),
+                    pos=(-0.01, -0.33, 0.48), # these work well for the pan clean scenario
                     rot=(0.76, 0.43, -0.24, -0.42),
                     # pos=(1.0, 0.0, 0.5), # (1.0, 0.0, 0.5) works well for block stacking and organize tools # ~1.2m in front, 0.8m up — adjust to taste
                     # rot= (0.6015, 0.3717, 0.3717, 0.6015),

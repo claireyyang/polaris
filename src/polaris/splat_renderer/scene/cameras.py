@@ -96,12 +96,19 @@ class Camera(nn.Module):
         self.R = R
         self.T = T
         center = np.zeros(3)
-        self.world_view_transform = (
+        wvt = (
             torch.tensor(getWorld2View2(R, center, T, self.scale))
             .transpose(0, 1)
             .to(self.data_device)
         )
-        # self.world_view_transform = torch.tensor(getWorld2View2(R, T, self.trans, self.scale)).transpose(0, 1).to(self.data_device)
+        det = torch.det(wvt)
+        if det.abs() < 1e-6:
+            print(
+                f"[Warning] set_extrinsics: world_view_transform is singular "
+                f"(det={det.item():.2e}), skipping update"
+            )
+            return
+        self.world_view_transform = wvt
         self.full_proj_transform = (
             self.world_view_transform.unsqueeze(0).bmm(
                 self.projection_matrix.unsqueeze(0)

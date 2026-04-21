@@ -350,6 +350,10 @@ class ManagerBasedRLSplatEnv(ManagerBasedRLEnv):
                 pos = self.scene[name].data.pos_w[0].detach().cpu().numpy()
                 quat = self.scene[name].data.quat_w_world[0]
 
+                if quat.norm() < 1e-6:
+                    print(f"[Warning] transform_sim_to_splat: camera '{name}' has zero quaternion, skipping")
+                    continue
+
                 rot = math.matrix_from_quat(quat).detach().cpu().numpy()
                 cam_extrinsics_dict[name] = {"pos": pos, "rot": rot}
 
@@ -363,6 +367,10 @@ class ManagerBasedRLSplatEnv(ManagerBasedRLEnv):
             if "wrist" in name:
                 pos = self.scene[name].data.pos_w[0].detach().cpu().numpy()
                 quat = self.scene[name].data.quat_w_world[0]
+
+                if quat.norm() < 1e-6:
+                    print(f"[Warning] render_splat: camera '{name}' has zero quaternion, skipping")
+                    continue
 
                 rot = math.matrix_from_quat(quat).detach().cpu().numpy()
                 cam_extrinsics_dict[name] = {"pos": pos, "rot": rot}
