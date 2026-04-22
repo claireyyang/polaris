@@ -32,6 +32,10 @@ class DroidJointPosClient(InferenceClient):
         curr_obs = self._extract_observation(request)
         return curr_obs["viz_camera"]
 
+    def flush_actions(self):
+        self.actions_from_chunk_completed = 0
+        self.pred_action_chunk = None
+
     def reset(self):
         self.actions_from_chunk_completed = 0
         self.pred_action_chunk = None

@@ -53,6 +53,14 @@ class InferenceClient(ABC):
 
         pass
 
+    def flush_actions(self):
+        """
+        Discard any buffered action chunk so the next infer() call queries
+        the server with a fresh observation. Override in subclasses that
+        maintain an action buffer. No-op by default.
+        """
+        pass
+
     @abstractmethod
     def reset(self):
         """

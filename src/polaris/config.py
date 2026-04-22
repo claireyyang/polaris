@@ -56,6 +56,14 @@ class EvalArgs:
 
 
 @dataclass
+class SteerEvalArgs(EvalArgs):
+    """Evaluation with interactive steering support."""
+
+    interactive: bool = True  # Show GUI and pause for steering input each action chunk
+    gui_port: int = 7860  # Port for the browser-based steering GUI
+
+
+@dataclass
 class JobCfg:
     """A single evaluation job in a batch."""
 
