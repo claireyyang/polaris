@@ -93,6 +93,7 @@ _HTML_TEMPLATE = """
 <script>
   let lastStep = null;
   let paused = false;
+  let lastRenderedPaused = null;  // tracks last rendered state to avoid clobbering input
 
   function doAction(action, instruction) {
     const body = new URLSearchParams({ action, new_instruction: instruction || '' });
@@ -102,6 +103,14 @@ _HTML_TEMPLATE = """
   function renderControls(state) {
     const ctrl = document.getElementById('controls');
     const hint = document.getElementById('hint');
+
+    // Compute the "effective" paused value (only meaningful if frame is ready)
+    const effectivePaused = state.frame_ready ? state.paused : null;
+
+    // Only touch the DOM when the state actually changes
+    if (effectivePaused === lastRenderedPaused) return;
+    lastRenderedPaused = effectivePaused;
+
     if (!state.frame_ready) {
       ctrl.innerHTML = '';
       hint.textContent = '';
@@ -113,8 +122,7 @@ _HTML_TEMPLATE = """
         <button class="btn-steer" onclick="doAction('steer', document.getElementById('instr-input').value)">Steer</button>
         <button class="btn-continue" onclick="doAction('continue', '')">Cancel &amp; Continue</button>`;
       hint.textContent = 'Enter a new instruction and click Steer, or just Continue.';
-      // Only focus if we just became paused
-      if (!paused) document.getElementById('instr-input').focus();
+      document.getElementById('instr-input').focus();
     } else {
       ctrl.innerHTML = `<button class="btn-pause" onclick="doAction('pause', '')">Pause to Correct</button>`;
       hint.innerHTML = 'The rollout will continue automatically...<br/>Press \"Pause to Correct\" to provide new input.';
@@ -404,7 +412,7 @@ def main(eval_args: SteerEvalArgs):
             if gui is not None:
                 new_instruction = gui.show(viz, step=bar.n)
                 if new_instruction is not None:
-                    language_instruction += new_instruction
+                    language_instruction += f" and {new_instruction}"
                     policy_client.flush_actions()
                     steering_log.append(
                         {"step": bar.n, "instruction": language_instruction}
