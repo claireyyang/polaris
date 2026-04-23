@@ -54,14 +54,14 @@ _HTML_TEMPLATE = """
   }
   .container { text-align: center; max-width: 900px; width: 100%; padding: 24px; }
   h1 { font-size: 1.4rem; margin-bottom: 12px; color: #00ffc8; }
-  .meta { color: #aaa; font-size: 0.9rem; margin-bottom: 8px; }
+  #meta { color: #aaa; font-size: 0.9rem; margin-bottom: 8px; min-height: 1.2em; }
   .frame-box {
     border: 2px solid #333; border-radius: 8px; overflow: hidden;
     display: inline-block; margin-bottom: 16px; background: #000;
   }
   .frame-box img { display: block; max-width: 100%; height: auto; }
-  .waiting { color: #888; padding: 80px 0; font-style: italic; }
-  form { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+  #waiting { color: #888; padding: 80px 0; font-style: italic; display: none; }
+  #controls { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; min-height: 42px; }
   input[type="text"] {
     width: 400px; padding: 10px 14px; border-radius: 6px;
     border: 1px solid #555; background: #16213e; color: #eee;
@@ -74,31 +74,85 @@ _HTML_TEMPLATE = """
   }
   .btn-continue { background: #00ffc8; color: #1a1a2e; }
   .btn-continue:hover { background: #00e6b5; }
+  .btn-pause { background: #f0a500; color: #fff; }
+  .btn-pause:hover { background: #d08f00; }
   .btn-steer { background: #e94560; color: #fff; }
   .btn-steer:hover { background: #d13550; }
-  .hint { color: #666; font-size: 0.8rem; margin-top: 10px; }
+  .hint { color: #666; font-size: 0.8rem; margin-top: 10px; min-height: 2.5em; }
 </style>
 </head>
 <body>
 <div class="container">
   <h1>Polaris – Steering</h1>
-  {% if step is not none %}
-    <div class="meta">Step {{ step }} &nbsp;|&nbsp; Instruction: {{ instruction }}</div>
-    <div class="frame-box">
-      <img src="/frame?t={{ step }}" alt="viz frame" />
-    </div>
-    <form method="POST" action="/submit">
-      <input type="text" name="new_instruction"
-             placeholder="New instruction (leave blank to continue)" autofocus />
-      <button type="submit" name="action" value="steer" class="btn-steer">Steer</button>
-      <button type="submit" name="action" value="continue" class="btn-continue">Continue</button>
-    </form>
-    <div class="hint">Enter a new instruction and click Steer, or just click Continue.</div>
-  {% else %}
-    <div class="waiting">Waiting for the next visualization frame…</div>
-    <meta http-equiv="refresh" content="1">
-  {% endif %}
-  </div>
+  <div id="meta"></div>
+  <div class="frame-box"><img id="viz-frame" src="" alt="viz frame" style="display:none" /></div>
+  <div id="waiting">Waiting for the next visualization frame…</div>
+  <div id="controls"></div>
+  <div id="hint" class="hint"></div>
+</div>
+<script>
+  let lastStep = null;
+  let paused = false;
+
+  function doAction(action, instruction) {
+    const body = new URLSearchParams({ action, new_instruction: instruction || '' });
+    fetch('/submit', { method: 'POST', body });
+  }
+
+  function renderControls(state) {
+    const ctrl = document.getElementById('controls');
+    const hint = document.getElementById('hint');
+    if (!state.frame_ready) {
+      ctrl.innerHTML = '';
+      hint.textContent = '';
+      return;
+    }
+    if (state.paused) {
+      ctrl.innerHTML = `
+        <input type="text" id="instr-input" placeholder="New instruction..." />
+        <button class="btn-steer" onclick="doAction('steer', document.getElementById('instr-input').value)">Steer</button>
+        <button class="btn-continue" onclick="doAction('continue', '')">Cancel &amp; Continue</button>`;
+      hint.textContent = 'Enter a new instruction and click Steer, or just Continue.';
+      // Only focus if we just became paused
+      if (!paused) document.getElementById('instr-input').focus();
+    } else {
+      ctrl.innerHTML = `<button class="btn-pause" onclick="doAction('pause', '')">Pause to Correct</button>`;
+      hint.innerHTML = 'The rollout will continue automatically...<br/>Press \"Pause to Correct\" to provide new input.';
+    }
+  }
+
+  function poll() {
+    fetch('/state')
+      .then(r => r.json())
+      .then(state => {
+        paused = state.paused;
+        const img = document.getElementById('viz-frame');
+        const waiting = document.getElementById('waiting');
+        const meta = document.getElementById('meta');
+
+        if (state.frame_ready) {
+          waiting.style.display = 'none';
+          img.style.display = 'block';
+          meta.textContent = 'Step ' + state.step + ' \u00a0|\u00a0 Instruction: ' + state.instruction;
+          // Update image only when step changes to avoid flicker
+          if (state.step !== lastStep) {
+            img.src = '/frame?t=' + state.step;
+            lastStep = state.step;
+          }
+        } else {
+          waiting.style.display = 'block';
+          img.style.display = 'none';
+          meta.textContent = '';
+        }
+
+        renderControls(state);
+      })
+      .catch(() => {})
+      .finally(() => setTimeout(poll, 500));
+  }
+
+  poll();
+</script>
 </body>
 </html>
 """
@@ -110,7 +164,7 @@ class SteeringGUIWeb:
     Replaces the OpenCV ``SteeringGUI`` so steering works over SSH
     tunnels.  The interface is identical to the caller:
 
-    *   ``show(frame_rgb, step)`` blocks until the user acts.
+    *   ``show(frame_rgb, step)`` blocks up to 2 seconds, unless paused.
     *   Returns the new instruction string, or ``None`` if the user
         just continued.
 
@@ -129,6 +183,8 @@ class SteeringGUIWeb:
         # Sim thread waits on this; Flask handler sets it.
         self._user_event = threading.Event()
         self._user_response: str | None = None
+        self._user_action: str | None = None
+        self._paused: bool = False
 
         # Signals that a new frame is ready for the browser to show.
         self._frame_ready = threading.Event()
@@ -147,13 +203,7 @@ class SteeringGUIWeb:
 
         @app.route("/")
         def index():
-            if self._frame_ready.is_set():
-                return render_template_string(
-                    _HTML_TEMPLATE,
-                    step=self._step,
-                    instruction=self.instruction,
-                )
-            return render_template_string(_HTML_TEMPLATE, step=None, instruction=None)
+            return render_template_string(_HTML_TEMPLATE)
 
         @app.route("/frame")
         def frame():
@@ -161,20 +211,39 @@ class SteeringGUIWeb:
                 return Response(status=204)
             return Response(self._frame_jpeg, mimetype="image/jpeg")
 
+        @app.route("/state")
+        def state():
+            from flask import jsonify
+            return jsonify({
+                "frame_ready": self._frame_ready.is_set(),
+                "step": self._step,
+                "instruction": self.instruction,
+                "paused": self._paused,
+            })
+
         @app.route("/submit", methods=["POST"])
         def submit():
             action = request.form.get("action", "continue")
             new_text = request.form.get("new_instruction", "").strip()
 
+            if action == "pause":
+                self._paused = True
+                self._user_action = "pause"
+                self._user_event.set()
+                return "", 204
+
             if action == "steer" and new_text:
                 self.instruction = new_text
                 self._user_response = new_text
+                self._user_action = "steer"
             else:
                 self._user_response = None
+                self._user_action = "continue"
 
             self._frame_ready.clear()
+            self._paused = False
             self._user_event.set()
-            return render_template_string(_HTML_TEMPLATE, step=None, instruction=None)
+            return render_template_string(_HTML_TEMPLATE, step=None, instruction=None, paused=False)
 
         return app
 
@@ -188,7 +257,8 @@ class SteeringGUIWeb:
         )
 
     def show(self, frame_rgb: np.ndarray, step: int) -> str | None:
-        """Display *frame_rgb* and block until the user acts.
+        """Display *frame_rgb* and wait for input up to 2 seconds.
+        If user pauses, wait indefinitely.
 
         Returns the new instruction string if the user entered one,
         otherwise ``None``.
@@ -199,11 +269,47 @@ class SteeringGUIWeb:
         self._frame_jpeg = buf.getvalue()
         self._step = step
 
-        self._user_event.clear()
-        self._frame_ready.set()
-        self._user_event.wait()
+        # Buffer check: If an action was submitted before show was reached
+        if self._user_action == "steer":
+            ans = self._user_response
+            self._user_action = None
+            self._user_response = None
+            self._paused = False
+            return ans
 
-        return self._user_response
+        if self._user_action == "continue":
+            self._user_action = None
+            self._user_response = None
+            self._paused = False
+            return None
+
+        self._user_event.clear()
+        self._user_action = None
+        self._user_response = None
+        
+        self._frame_ready.set()
+
+        if self._paused:
+            self._user_event.wait()
+            if self._user_action == "steer":
+                return self._user_response
+            return None
+
+        triggered = self._user_event.wait(timeout=0.5) # changed to 0.5 seconds
+
+        if triggered:
+            if self._user_action == "pause":
+                self._user_event.clear()
+                self._user_event.wait()
+                if self._user_action == "steer":
+                    return self._user_response
+                return None
+            elif self._user_action == "steer":
+                return self._user_response
+            else:
+                return None
+        else:
+            return None
 
     def close(self) -> None:
         pass
@@ -298,7 +404,7 @@ def main(eval_args: SteerEvalArgs):
             if gui is not None:
                 new_instruction = gui.show(viz, step=bar.n)
                 if new_instruction is not None:
-                    language_instruction = new_instruction
+                    language_instruction += new_instruction
                     policy_client.flush_actions()
                     steering_log.append(
                         {"step": bar.n, "instruction": language_instruction}
