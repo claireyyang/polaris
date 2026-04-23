@@ -77,7 +77,8 @@ def main(eval_args: EvalArgs):
 
     video = []
     scene_state_log = []
-    horizon = env.max_episode_length
+    # horizon = env.max_episode_length
+    horizon = 1000
     bar = tqdm.tqdm(range(horizon))
     obs, info = env.reset(
         object_positions=initial_conditions[episode % len(initial_conditions)]

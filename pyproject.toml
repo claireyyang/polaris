@@ -17,6 +17,7 @@ dependencies = [
     "simple-knn",
     "flask>=3.0",
     "openpi-client",
+    "pyngrok",
     #"torch>=2.9.0", # Change here for different CUDA version
     #"torchvision>=0.24.0", # Change here for different CUDA version
 ]

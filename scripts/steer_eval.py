@@ -10,9 +10,13 @@ conditions.
 
 To use remotely, SSH-tunnel the GUI port to your local machine:
 
-    ssh -L 7860:localhost:7860 user@remote
+    ssh -L 7860:127.0.0.1:7860 user@remote
 
-Then open http://localhost:7860 in your browser.
+Then open http://127.0.0.1:7860 in your browser.
+
+Using 127.0.0.1 (not localhost) avoids an IPv4/IPv6 mismatch: on modern
+Linux, ``localhost`` may resolve to ``::1`` (IPv6) while ssh -L binds the
+IPv4 loopback, causing intermittent failures.
 """
 
 import json
@@ -30,11 +34,44 @@ import threading
 import logging
 
 from flask import Flask, Response, request, render_template_string
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 from pathlib import Path
 from isaaclab.app import AppLauncher
 
 from polaris.config import SteerEvalArgs
+
+
+# ── Frame annotation ────────────────────────────────────────────────
+
+def _annotate_frame(frame_rgb: np.ndarray, text: str, max_chars: int = 80) -> np.ndarray:
+    """Burn *text* into the top-left corner of *frame_rgb* and return a copy."""
+    img = Image.fromarray(frame_rgb)
+    draw = ImageDraw.Draw(img)
+    # Wrap long instructions so they don't overflow the frame width
+    words = text.split()
+    lines, current = [], []
+    for w in words:
+        if sum(len(x) for x in current) + len(current) + len(w) > max_chars:
+            if current:
+                lines.append(" ".join(current))
+            current = [w]
+        else:
+            current.append(w)
+    if current:
+        lines.append(" ".join(current))
+    label = "\n".join(lines)
+
+    try:
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", size=16)
+    except OSError:
+        font = ImageFont.load_default()
+
+    x, y, pad = 8, 8, 2
+    # Shadow / outline for legibility
+    for dx, dy in [(-1, -1), (1, -1), (-1, 1), (1, 1)]:
+        draw.text((x + dx, y + dy), label, fill=(0, 0, 0), font=font)
+    draw.text((x, y), label, fill=(255, 255, 255), font=font)
+    return np.array(img)
 
 
 # ── Steering GUI (browser-based) ─────────────────────────────────────
@@ -241,7 +278,6 @@ class SteeringGUIWeb:
                 return "", 204
 
             if action == "steer" and new_text:
-                self.instruction = new_text
                 self._user_response = new_text
                 self._user_action = "steer"
             else:
@@ -251,15 +287,23 @@ class SteeringGUIWeb:
             self._frame_ready.clear()
             self._paused = False
             self._user_event.set()
-            return render_template_string(_HTML_TEMPLATE, step=None, instruction=None, paused=False)
+            return "", 204
 
         return app
 
     def _run_server(self) -> None:
-        print(
-            f"\n  *** Steering GUI is live at http://localhost:{self.port} ***\n"
-            f"  (SSH tunnel: ssh -L {self.port}:localhost:{self.port} user@remote)\n"
-        )
+        try:
+            from pyngrok import ngrok
+            public_url = ngrok.connect(self.port).public_url
+            print(
+                f"\n  *** Steering GUI (public) : {public_url} ***\n"
+                f"  *** Steering GUI (local)  : http://127.0.0.1:{self.port} ***\n"
+            )
+        except Exception as e:
+            print(
+                f"\n  *** Steering GUI is live at http://127.0.0.1:{self.port} ***\n"
+                f"  (ngrok unavailable: {e})\n"
+            )
         self._app.run(
             host="0.0.0.0", port=self.port, threaded=True, use_reloader=False,
         )
@@ -300,21 +344,36 @@ class SteeringGUIWeb:
         if self._paused:
             self._user_event.wait()
             if self._user_action == "steer":
-                return self._user_response
+                ans = self._user_response
+                self._user_action = None
+                self._user_response = None
+                return ans
+            self._user_action = None
+            self._user_response = None
             return None
 
-        triggered = self._user_event.wait(timeout=0.5) # changed to 0.5 seconds
+        triggered = self._user_event.wait(timeout=0.2)
 
         if triggered:
             if self._user_action == "pause":
                 self._user_event.clear()
                 self._user_event.wait()
                 if self._user_action == "steer":
-                    return self._user_response
+                    ans = self._user_response
+                    self._user_action = None
+                    self._user_response = None
+                    return ans
+                self._user_action = None
+                self._user_response = None
                 return None
             elif self._user_action == "steer":
-                return self._user_response
+                ans = self._user_response
+                self._user_action = None
+                self._user_response = None
+                return ans
             else:
+                self._user_action = None
+                self._user_response = None
                 return None
         else:
             return None
@@ -402,6 +461,7 @@ def main(eval_args: SteerEvalArgs):
     while True:
         action, viz = policy_client.infer(obs, language_instruction)
         if viz is not None:
+            viz = _annotate_frame(viz, language_instruction)
             video.append(viz)
 
             step_state = env.get_scene_state(cam_name="viz_cam")
@@ -413,6 +473,7 @@ def main(eval_args: SteerEvalArgs):
                 new_instruction = gui.show(viz, step=bar.n)
                 if new_instruction is not None:
                     language_instruction += f" and {new_instruction}"
+                    gui.instruction = language_instruction  # keep GUI state in sync
                     policy_client.flush_actions()
                     steering_log.append(
                         {"step": bar.n, "instruction": language_instruction}
@@ -423,7 +484,7 @@ def main(eval_args: SteerEvalArgs):
                     )
                     action, viz = policy_client.infer(obs, language_instruction)
                     if viz is not None:
-                        video[-1] = viz
+                        video[-1] = _annotate_frame(viz, language_instruction)
 
         obs, rew, term, trunc, info = env.step(
             torch.tensor(action).reshape(1, -1), expensive=policy_client.rerender
